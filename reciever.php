@@ -1,118 +1,94 @@
-<?php
- ini_set('display_errors', '1');
+<?php  
+include('phpseclib/Crypt/RSA.php');
+include('phpseclib/Crypt/AES.php');
+
+include('phpseclib/Math/BigInteger.php');
+//include('phpseclib/Crypt/Hash.php');
+
+ini_set('display_errors', '1');
+//libxml_use_internal_errors(true);
 
 
- $hostname = "localhost";
- $username = "boincadm";
- $password = "cluster";
- $database = "gasad";
- 
- mysql_connect($hostname, $username, $password) OR DIE("Connection to database error");
- mysql_select_db($database);
- 
-// $msg = $_FILES['message'];
-/*****************************/
-
-function get_userId_by_code($code) {
- 	$query = "SELECT * FROM UserOfPickUpPoint WHERE id_code='".$code."';";
-// echo $query;
- 
- 	$result = mysql_query($query);
-
- 	if (!$result) {
-    	die('Can\'t get user_id: ' . mysql_error());
-	}
-
- 	if(!mysql_num_rows($result)) {
- 		//echo "\n get_userId_by_code: empty result";
- 		return null;
- 		//die();
- 	}
-
- 	else {
- 		$row = mysql_fetch_array($result);
-// echo "Client id is".$row['id'];
-        //var_dump($row);
-        return $row[0];
-    } 	
+$xml_post = file_get_contents('php://input');
+if (!$xml_post) {
+    echo 'Error: no input file';
+    die();
 }
 
 
-function get_data_from_table($table_name) {
- 	$query = "SELECT * FROM ".$table_name.";";
-// echo $query;
- 
- 	$result = mysql_query($query);
+$xml = simplexml_load_string($xml_post);
 
- 	if (!$result) {
-    	die('Can\'t get data from table: ' . mysql_error());
-	}
-
- 	if(!mysql_num_rows($result)) {
- 		echo "\n get_data_from_table: empty table $table_name";
- 		return null;
- 		//die();
- 	}
-
- 	else {
- 		//$row = mysql_fetch_array($result);
-// echo "Client id is".$row['id'];
- 		$info = array();
-
-        while($row=mysql_fetch_assoc($result)){
-			$info[] = $row;
-			}
-
-        return $info;
-    } 	
+if (!$xml) {
+    echo "Failed loading XML\n";
+    foreach(libxml_get_errors() as $error) {
+        echo "\t", $error->message;
+    }
+    die();
 }
+echo 'XML Recieved. <br>';
 
 
-function get_pickUpPoint_info_by_userId($userId) {
+/******************************* OPEN_SSL decryption *****************/
 
-	//$query = "SELECT PickUpPoint.name, PickUpPoint.address FROM PickUpPoint, User_PickUpPoint, UserOfPickUpPoint WHERE UserOfPickUpPoint.id='".$userId."'"." AND UserOfPickUpPoint.id=User_PickUpPoint.id_user AND User_PickUpPoint.id_pickuppoint=PickUpPoint.id;"; //
-	$query = "SELECT PickUpPoint.name, PickUpPoint.city, PickUpPoint.street FROM PickUpPoint, User_PickUpPoint, UserOfPickUpPoint WHERE UserOfPickUpPoint.id='".$userId."' AND UserOfPickUpPoint.id=User_PickUpPoint.id_user AND User_PickUpPoint.id_pickuppoint=PickUpPoint.id;";
+/*
+// Encrypt the data to $encrypted using the public key
+$pempublickey = file_get_contents('my_public.pem');
+$pubKey = openssl_pkey_get_public($pempublickey);
+openssl_public_encrypt($plain_text, $encryptedData, $pubKey);
+*/
 
- //echo $query;
- 	//$query = "SELECT * FROM User_PickUpPoint"; //WHERE id_user='".$userId."';"; //
- 	//echo $query;
+// load the private key and decrypt the encrypted data
+$pemprivatekey = file_get_contents('private.pem');
+$privateKey = openssl_pkey_get_private($pemprivatekey);
 
- 	$result = mysql_query($query);
+$encryptedAesKey = $xml->kparam1;
+echo '   Encrypted key: ' . $encryptedAesKey;
 
- 	if (!$result) {
-    	die('Can\'t get data from table: ' . mysql_error());
-	}
+$encryptedAesVi = $xml->kparam2;
+echo '   Encrypted vi: ' . $encryptedAesVi;
 
- 	if(!mysql_num_rows($result)) {
- 		echo "\n get_pickUpPoint_info_by_userId: empty result";
- 		return null;
- 		//die();
- 	}
+openssl_private_decrypt(base64_decode($encryptedAesKey), $decryptedAESKey, $privateKey);
+openssl_private_decrypt(base64_decode($encryptedAesVi), $decryptedAESVi, $privateKey);
 
- 	else {
- 		$user_info = array();
+echo '   Decrypted key: ' . $decryptedAESKey;
+echo '   Decrypted vi: ' . $decryptedAESVi;
 
-        while($row=mysql_fetch_assoc($result)){
-			$user_info[] = $row;
-			}
 
-        return $user_info;
-    } 		
-}
+$encrypted_text = $xml->text;
+echo '   Encrypted key text: ' . $encrypted_text;
 
-function add_json_element_in_array($response_array, $json_object_tag, $json_object) {
-
-	$response_array["$json_object_tag"] = "$json_object";
-	return $response_array;
-}
- 
+/***********************************************/
 
 
 
-//echo json_encode($settings_array);
+
+/************************* PHP mcrypt decryption ********************/
+$iv = $decryptedAESVi; //'fedcba9876543210'; #Same as in JAVA
+$key = $decryptedAESKey; //'0123456789abcdef'; #Same as in JAVA
+
+$code = hex2binnary($encrypted_text);
+$td = mcrypt_module_open('rijndael-128', '', 'cbc', $iv);
+
+mcrypt_generic_init($td, $key, $iv);
+$decryptedAes = mdecrypt_generic($td, $code);
+
+mcrypt_generic_deinit($td);
+mcrypt_module_close($td);
+
+$decrypted_final = utf8_encode(trim($decryptedAes));
+
+echo '   Decrypted text: ' . $decrypted_final;
+
+
+function hex2binnary($hexdata) {
+  $bindata = '';
+
+  for ($i = 0; $i < strlen($hexdata); $i += 2) {
+        $bindata .= chr(hexdec(substr($hexdata, $i, 2)));
+  }
+    return $bindata;
+  }
+
+/*****************************************************************/
+
 ?>
-
-
-
-
-
