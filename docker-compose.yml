@@ -1,0 +1,20 @@
+version: '2'
+services:
+
+  web:
+    restart: always
+    build: .
+    # image: php:7.0-apache
+    networks:
+      default:
+      proxy:
+    environment:
+      VIRTUAL_HOST: nastya.boincfast.ru
+    volumes:
+      - ./src:/var/www/html
+
+networks:
+  proxy:
+    external:
+      name: nginxproxy_backend
+
